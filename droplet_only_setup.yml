@@ -1,0 +1,316 @@
+---
+- name: Set up Digital Ocean droplet with code-server and llm – for saving as a snapshot
+  hosts: localhost
+  connection: local
+  remote_user: root
+  vars_files:
+    - vars/main.yml
+    #- vars/users.yml removed dependency in templates
+    - secrets.yml  # This file should be encrypted with ansible-vault
+
+  tasks:
+
+    - name: Check for existing droplet
+      community.digitalocean.digital_ocean_droplet_info:
+        oauth_token: "{{ do_api_key }}"
+        name: "code-server-droplet-u22-base"
+      register: existing_droplet
+      failed_when: false
+
+    - name: Set create flag
+      set_fact:
+        create_droplet: "{{ existing_droplet.data | default([]) | length == 0 }}"
+
+    - name: show create flag
+      debug:
+        var: create_droplet
+
+    - name: Create DigitalOcean Droplet
+      community.digitalocean.digital_ocean_droplet:
+        state: present
+        name: "code-server-droplet-u22-base"
+        region: "{{ do_region }}"
+        size: "{{ do_size }}"
+        image: "ubuntu-22-04-x64"
+        ssh_keys: "{{ do_ssh_keys }}"
+        oauth_token: "{{ do_api_key }}"
+      when: create_droplet
+      register: created_droplet
+
+    - name: Display info from created set
+      debug:
+        var: created_droplet
+
+    - name: Wait for network assignment and register droplet
+      community.digitalocean.digital_ocean_droplet_info:
+        oauth_token: "{{ do_api_key }}"
+        name: "code-server-droplet-u22-base"
+      register: droplet
+      #until: droplet_info.data.droplet.networks.v4 | length > 0
+      until: droplet.data[0].networks.v4 | length > 0
+      retries: 30
+      delay: 10
+
+    - name: Display droplet information
+      debug:
+        var: droplet
+
+    - name: Add new host to inventory
+      add_host:
+        name: "{{ droplet.data[0].networks.v4 | selectattr('type', 'equalto', 'public') | map(attribute='ip_address') | first }}"
+        groups: new_droplets
+        ansible_ssh_private_key_file: "{{ ssh_private_key_file }}"
+
+    - name: Wait for SSH to come up
+      wait_for:
+        host: "{{ droplet.data[0].networks.v4 | selectattr('type', 'equalto', 'public') | map(attribute='ip_address') | first }}"
+        port: 22
+        delay: 10
+        timeout: 320
+
+- name: Configure new droplet
+  hosts: new_droplets
+  become: yes
+  remote_user: root
+  vars_files:
+    - vars/main.yml
+    - vars/users.yml
+
+  tasks:
+
+    - name: Wait for cloud-init to complete
+      command: cloud-init status --wait
+      changed_when: false
+
+    - name: Check for running apt/dpkg processes
+      shell: ps aux | grep -E 'apt|dpkg' | grep -v grep
+      register: apt_processes
+      changed_when: false
+      failed_when: false
+
+    - name: Display running apt/dpkg processes
+      debug:
+        msg: "Running apt/dpkg processes: {{ apt_processes.stdout_lines }}"
+      when: apt_processes.stdout != ""
+
+    - name: Check lock file status
+      stat:
+        path: /var/lib/dpkg/lock-frontend
+      register: lock_status
+
+    - name: Check processes holding the APT lock
+      shell: lsof /var/lib/dpkg/lock-frontend | awk 'NR>1 {print $2}'
+      register: lock_processes
+      changed_when: false
+      failed_when: false
+      when: lock_status.stat.exists
+
+    - name: Display processes holding the lock
+      debug:
+        msg: "Processes holding the APT lock: {{ lock_processes.stdout_lines | join(', ') }}"
+      when: lock_status.stat.exists and lock_processes.stdout != ""
+
+    - name: Check if lock file is stale
+      set_fact:
+        lock_is_stale: "{{ lock_status.stat.exists and lock_processes.stdout == '' and apt_processes.stdout == '' }}"
+
+    - name: Display warning about stale lock
+      debug:
+        msg: "WARNING: APT lock file exists but no processes are holding it. This may be a stale lock."
+      when: lock_is_stale
+
+    - name: Check lock file status
+      stat:
+        path: /var/lib/dpkg/lock-frontend
+      register: lock_status
+
+    - name: Display lock file info
+      debug:
+        msg: "Lock file exists: {{ lock_status.stat.exists }} | Last modified: {{ lock_status.stat.mtime }}"
+      when: lock_status.stat.exists and (ansible_date_time.epoch|int - lock_status.stat.mtime|int) > 600
+
+    - name: Remove stale lock file
+      file:
+        path: /var/lib/dpkg/lock-frontend
+        state: absent
+      when: lock_status.stat.exists and (ansible_date_time.epoch|int - lock_status.stat.mtime|int) > 600
+
+    - name: Wait for apt to finish
+      wait_for:
+        path: /var/lib/dpkg/lock-frontend
+        state: absent
+        timeout: "{{ 300 if created_droplet is defined else 60 }}"
+      register: lock_wait
+
+    - name: Update and upgrade apt packages
+      apt:
+        upgrade: yes
+        update_cache: yes
+        force_apt_get: yes
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      vars:
+        ansible_python_interpreter: auto_silent
+
+    - name: Install basic utilities
+      apt:
+        name: [curl, wget, git]
+        state: present
+        force_apt_get: yes
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      vars:
+        ansible_python_interpreter: auto_silent
+      async: 300
+      poll: 10
+
+    - name: Install Python packages
+      apt:
+        name: [python3, python3-pip, python3-venv, virtualenv, python3-pytest]
+        state: present
+        force_apt_get: yes
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      vars:
+        ansible_python_interpreter: auto_silent
+      async: 300
+      poll: 10
+
+    - name: Install python3-venv  #move to droplet creation
+      apt:
+        name: python3-venv
+        state: present
+        update_cache: yes
+      check_mode: yes
+      register: pip_check
+      
+    - name: Actually install python3-venv
+      apt:
+        name: python3-venv
+        state: present
+      when: pip_check.changed
+
+    - name: Install python3-pip  #move to droplet creation
+      apt:
+        name: python3-pip
+        state: present
+        update_cache: yes
+      check_mode: yes
+      register: pip_check
+      
+    - name: Actually install python3-pip
+      apt:
+        name: python3-pip
+        state: present
+      when: pip_check.changed
+
+    - name: Install Node.js
+      apt:
+        name: [nodejs]
+        state: present
+        force_apt_get: yes
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      async: 300
+      poll: 10
+
+    - name: Install npm
+      apt:
+        name: [npm]
+        state: present
+        force_apt_get: yes
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      async: 300
+      poll: 10
+
+    - name: Install nginx
+      apt:
+        name: nginx
+        state: present
+        force_apt_get: yes
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      vars:
+        ansible_python_interpreter: auto_silent
+      async: 300
+      poll: 10
+
+    - name: Install code-server
+      shell: curl -fsSL https://code-server.dev/install.sh | sh
+      args:
+        creates: /usr/bin/code-server
+  
+    - name: Install llm
+      pip:
+        name: llm
+        state: present
+
+    - name: Configure Nginx
+      template:
+        src: templates/nginx.conf.j2
+        dest: /etc/nginx/sites-available/code-server
+      notify: Reload Nginx
+
+    - name: Enable Nginx site
+      file:
+        src: /etc/nginx/sites-available/code-server
+        dest: /etc/nginx/sites-enabled/code-server
+        state: link
+      notify: Reload Nginx
+
+    - name: Create SSL directory
+      file:
+        path: /etc/nginx/ssl
+        state: directory
+        mode: '0755'
+
+    - name: Update nginx template for SSL
+      template:
+        src: templates/nginx_ssl.conf.j2
+        dest: /etc/nginx/sites-available/code-server
+      notify: Reload Nginx
+
+    - name: Verify system packages
+      command: dpkg -l {{ item }}
+      register: pkg_check
+      changed_when: false
+      loop:
+        - curl
+        - wget
+        - git
+        - python3
+        - python3-pip
+        - python3-venv
+        - virtualenv
+        - python3-pytest
+        - nodejs
+        - npm
+        - nginx
+
+    - name: Verify code-server installation
+      command: which code-server
+      register: code_server_check
+      changed_when: false
+
+    - name: Verify llm installation
+      command: which llm
+      register: llm_check
+      changed_when: false
+
+    - name: Display verification results
+      debug:
+        msg: "Package checks complete"
+      when: 
+        - pkg_check.results | map(attribute='rc') | list | unique == [0]
+        - code_server_check.rc == 0 
+        - llm_check.rc == 0
+
+  handlers:
+    - name: Reload Nginx
+      service:
+        name: nginx
+        state: reloaded
+
+
+

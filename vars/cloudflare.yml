@@ -1,0 +1,2 @@
+cloudflare_zone: "workroomprds.com"
+cloudflare_record: "envs"

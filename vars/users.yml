@@ -1,0 +1,31 @@
+users:
+  - username: james
+    password: password
+    port: 8080
+  - username: lisa
+    password: password
+    port: 8081
+  - username: rachel
+    password: password
+    port: 8082
+  - username: paul
+    password: password
+    port: 8083
+  - username: elizabeth
+    password: password
+    port: 8084
+  - username: uros
+    password: password
+    port: 8085
+  - username: niel
+    password: password
+    port: 8086
+  - username: user1
+    password: password
+    port: 8087
+  - username: bart
+    password: password
+    port: 8088
+  - username: huib
+    password: password
+    port: 8089

@@ -1,0 +1,37 @@
+---
+# DigitalOcean Droplet Configuration (slugs at https://slugs.do-api.dev )
+do_region: "lon1"  # Replace with your preferred region
+do_size: "s-2vcpu-4gb"  # Replace with your preferred droplet size
+do_image: "ubuntu-24-04-x64"  # Replace with your preferred OS image
+do_ssh_keys: 
+  - "56:ec:54:5d:9f:c2:4a:ad:0f:e0:09:ad:f2:a7:05:23"  # Replace with your SSH key fingerprint
+
+# SSH Configuration
+ssh_private_key_file: "~/.ssh/do_key_aivstdd"  # Replace with the path to your SSH private key
+
+# Nginx Configuration
+nginx_server_name: "{{ ansible_host }}"  # Replace with your domain or use {{ ansible_host }} if you don't have a domain
+
+# Code-server Configuration
+#code_server_version: "4.9.1"  # Replace with your preferred version or remove to use the latest
+
+# Python and pip Configuration
+python_version: "3.8"  # Adjust as needed
+pip_version: "21.3.1"  # Adjust as needed
+
+# Additional Software Versions (if needed)
+nodejs_version: "14.x"  # Adjust as needed
+npm_version: "6.14.15"  # Adjust as needed
+
+# LLM Configuration
+# use the latest
+
+# Firewall Configuration (if you want to set up ufw)
+ufw_allowed_ports:
+  - "22"
+  - "80"
+  - "443"
+
+# Any other global variables you might need
+ssl_enabled: true
+domain: "envs.workroomprds.com"

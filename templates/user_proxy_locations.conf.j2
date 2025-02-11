@@ -1,0 +1,26 @@
+server {
+    listen 80;
+    listen 443 ssl;
+    server_name {{ ansible_host }};
+
+    ssl_certificate /etc/letsencrypt/live/envs.workroomprds.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/envs.workroomprds.com/privkey.pem;
+
+    root /var/www/html;  
+    index index.html; 
+
+    {% for user in users %}
+    location /{{ user.username }}/ {
+        root /var/www;
+        try_files $uri $uri/ /{{ user.username }}/index.html;
+    }
+
+    location /{{ user.username }}/code-server/ {
+        proxy_pass http://localhost:{{ user.port }}/;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection upgrade;
+        proxy_set_header Accept-Encoding gzip;
+    }
+    {% endfor %}
+}

@@ -1,0 +1,20 @@
+{
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "terminal.integrated.profiles.linux": {
+        "bash": {
+            "path": "bash",
+            "icon": "terminal-bash",
+            "args": ["-l"]
+        }
+    },
+    "terminal.integrated.cwd": "/home/{{ item.username }}/llm-env",
+    "terminal.integrated.shellArgs.linux": ["-c", "source bin/activate"],
+    "workbench.startupEditor": "none",
+    "terminal.integrated.defaultLocation": "view",
+    "python.defaultInterpreterPath": "/home/{{ item.username }}/llm-env/bin/python",
+    "terminal.integrated.persistentSessionReviveProcess": "never",
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.sendKeybindingsToShell": true,
+    "terminal.integrated.allowChords": true,
+    "terminal.integrated.commandsToSkipShell": []
+}

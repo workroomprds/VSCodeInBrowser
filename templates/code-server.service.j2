@@ -1,0 +1,12 @@
+[Unit]
+Description=code-server
+After=network.target
+
+[Service]
+Type=simple
+User={{ item.username }}
+ExecStart=/usr/bin/code-server --bind-addr 127.0.0.1:{{ item.port }} --user-data-dir /home/{{ item.username }}/.vscode --extensions-dir /home/{{ item.username }}/.vscode/extensions
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

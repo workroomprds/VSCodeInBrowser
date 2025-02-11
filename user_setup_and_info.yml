@@ -1,0 +1,394 @@
+---
+## A playbook to create a droplet from a snapshot, and to set up the droplet with nginx, ssl, code-server and llm (should have been done in the source image), and set up users , code-server + llm for each user.
+
+- name: Create or verify droplet
+  hosts: localhost
+  become: no
+  vars_files:
+    - secrets.yml  # This file should be encrypted with ansible-vault
+    - vars/main.yml
+
+
+  tasks:
+    - name: Check for existing droplet
+      community.digitalocean.digital_ocean_droplet_info:
+        oauth_token: "{{ do_api_key }}"
+        name: "code-server-droplet-01"
+      register: existing_droplet
+      failed_when: false
+
+    - name: Set create flag
+      set_fact:
+        create_droplet: "{{ existing_droplet.data | default([]) | length == 0 }}"
+
+    - name: show create flag
+      debug:
+        var: create_droplet
+
+    - name: Create droplet from snapshot
+      digital_ocean_droplet:
+        state: present                      
+        name: code-server-droplet-01
+        image: code-server-droplet-u22-base-20250202
+        region: "{{ do_region }}"
+        size: "{{ do_size }}"
+        image: "{{ do_image }}"
+        ssh_keys: "{{ do_ssh_keys }}"
+        oauth_token: "{{ do_api_key }}"
+        wait_timeout: 500
+      when: create_droplet
+      register: created_droplet
+
+    - name: Wait for network assignment and register droplet
+      community.digitalocean.digital_ocean_droplet_info:
+        oauth_token: "{{ do_api_key }}"
+        name: "code-server-droplet-01"
+      register: droplet
+      until: droplet.data[0].networks.v4 | length > 0
+      retries: 30
+      delay: 10
+
+    - name: Display droplet information
+      debug:
+        var: droplet
+
+
+    - name: Wait for SSH to come up
+      wait_for:
+        host: "{{ droplet.data[0].networks.v4 | selectattr('type', 'equalto', 'public') | map(attribute='ip_address') | first }}"
+        port: 22
+        delay: 10
+        timeout: 320
+
+    - name: Add new host to inventory
+      add_host:
+        name: "{{ droplet.data[0].networks.v4 | selectattr('type', 'equalto', 'public') | map(attribute='ip_address') | first }}"
+        groups: new_droplets
+        ansible_ssh_private_key_file: "{{ ssh_private_key_file }}"
+
+
+- name: Configure users for code-server and set up Claude API keys
+  hosts: new_droplets
+  become: yes
+  remote_user: root
+  vars_files:
+    - secrets.yml  # This file should be encrypted with ansible-vault
+    - vars/main.yml
+    - vars/users.yml
+    - vars/cloudflare.yml
+    - vars/ssl.yml
+
+  tasks:
+
+    - name: Check nginx installation
+      command: dpkg -l nginx
+      register: nginx_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install nginx
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+      register: nginx_install
+      when: nginx_check.rc != 0
+
+    - name: Create Nginx conf.d directory
+      file:
+        path: /etc/nginx/conf.d
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    # Add to the existing package installation tasks:
+    - name: Install certbot and DNS plugins
+      apt:
+        name: 
+          - certbot
+          - python3-certbot-nginx
+        state: present
+        force_apt_get: yes
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      async: 300
+      poll: 10
+      when: inventory_hostname in groups['new_droplets']
+
+
+    - name: Configure Cloudflare DNS
+      community.general.cloudflare_dns:
+        zone: "{{ cloudflare_zone }}"
+        record: "{{ cloudflare_record }}"
+        type: A
+        #value: "{{ droplet.data[0].networks.v4 | selectattr('type', 'equalto', 'public') | map(attribute='ip_address') | first }}"
+        value: "{{ ansible_host }}"
+        api_token: "{{ cloudflare_api_token }}"
+        proxied: yes
+        state: present
+
+    - name: Wait for DNS propagation
+      wait_for:
+        timeout: 60
+      delegate_to: localhost
+      become: no
+
+    - name: Stop nginx for certbot
+      service:
+        name: nginx
+        state: stopped
+
+    - name: Get Let's Encrypt certificate
+      command: certbot certonly --standalone -d {{ ssl_domain }} --email {{ certbot_email }} --agree-tos --non-interactive
+      notify: reload nginx
+
+    - name: Start nginx
+      service:
+        name: nginx
+        state: started
+        state: started
+        
+    - name: Create SSL directory
+      file:
+        path: /etc/nginx/ssl
+        state: directory
+        mode: '0755'
+
+    - name: Update nginx template for SSL
+      template:
+        src: templates/nginx_ssl.conf.j2
+        dest: /etc/nginx/sites-available/code-server
+      notify: reload nginx
+
+    - name: Configure Nginx proxy locations for users
+      template:
+        src: templates/user_proxy_locations.conf.j2
+        dest: /etc/nginx/conf.d/user_proxy_locations.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: reload nginx
+
+    - name: Remove default nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: reload nginx
+
+    - name: Force all notified handlers to run at this point
+      meta: flush_handlers
+
+    - name: Install code-server
+      shell: curl -fsSL https://code-server.dev/install.sh | sh
+      args:
+        creates: /usr/bin/code-server
+
+    - name: Create user accounts
+      user:
+        name: "{{ item.username }}"
+        password: "{{ item.password | password_hash('sha512') }}"
+        shell: /bin/bash
+        groups: sudo
+        append: yes
+        state: present
+      loop: "{{ users }}"
+
+    - name: Create user landing page directories
+      file:
+        path: "/var/www/{{ item.username }}"
+        state: directory
+        mode: '0755'
+      loop: "{{ users }}"
+
+    - name: Create landing pages
+      template:
+        src: templates/user_landing.html.j2
+        dest: "/var/www/{{ item.username }}/index.html"
+      loop: "{{ users }}"
+
+    - name: Create root landing page
+      template:
+        src: templates/root_landing.html.j2
+        dest: /var/www/html/index.html
+        mode: '0644'
+
+    - name: Create code-server config directories
+      file:
+        path: "/home/{{ item.username }}/.config/code-server"
+        state: directory
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: '0755'
+      loop: "{{ users }}"
+
+    - name: Create code-server configs
+      template:
+        src: templates/code-server-config.yaml.j2
+        dest: "/home/{{ item.username }}/.config/code-server/config.yaml"
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: '0600'
+      loop: "{{ users }}"
+
+    - name: Set up code-server service for each user
+      template:
+        src: templates/code-server.service.j2
+        dest: "/etc/systemd/system/code-server@{{ item.username }}.service"
+      loop: "{{ users }}"
+
+    - name: Start and enable code-server services
+      systemd:
+        name: "code-server@{{ item.username }}"
+        state: started
+        enabled: yes
+      loop: "{{ users }}"
+
+    - name: Create .llm directory for each user
+      file:
+        path: "/home/{{ item.username }}/.llm"
+        state: directory
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: '0700'
+      loop: "{{ users }}"
+
+    - name: Install python3-venv  #move to droplet creation
+      apt:
+        name: python3-venv
+        state: present
+        update_cache: yes
+      check_mode: yes
+      register: pip_check
+      
+    - name: Actually install python3-venv
+      apt:
+        name: python3-venv
+        state: present
+      when: pip_check.changed
+
+    - name: Create llm virtual environment
+      command: python3 -m venv /home/{{ item.username }}/llm-env
+      args:
+        creates: /home/{{ item.username }}/llm-env
+      loop: "{{ users }}"
+
+    - name: Set ownership of llm environment
+      file:
+        path: /home/{{ item.username }}/llm-env
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        recurse: yes
+      loop: "{{ users }}"
+
+    - name: Install python3-pip  #move to droplet creation
+      apt:
+        name: python3-pip
+        state: present
+        update_cache: yes
+      check_mode: yes
+      register: pip_check
+      
+    - name: Actually install python3-pip
+      apt:
+        name: python3-pip
+        state: present
+      when: pip_check.changed
+
+    - name: Install virtualenv
+      apt:
+        name: virtualenv
+        state: present
+        update_cache: yes
+
+    - name: Install llm in virtual environment
+      pip:
+        name: llm
+        virtualenv: /home/{{ item.username }}/llm-env
+      become: yes
+      become_user: "{{ item.username }}"
+      loop: "{{ users }}"
+
+    - name: Set up llm config for each user
+      template:
+        src: templates/llm_config.yaml.j2
+        dest: "/home/{{ item.username }}/.llm/config.yaml"
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: '0600'
+      loop: "{{ users }}"
+
+    - name: Install llm-anthropic for each user
+      shell: |
+        . /home/{{ item.username }}/llm-env/bin/activate && llm install llm-anthropic
+      args:
+        executable: /bin/bash
+      become: yes
+      become_user: "{{ item.username }}"
+      loop: "{{ users }}"
+
+    - name: Configure llm with Anthropic API key
+      shell: |
+        . /home/{{ item.username }}/llm-env/bin/activate && llm keys set anthropic --value {{ claude_key }}
+      become: yes
+      become_user: "{{ item.username }}"
+      loop: "{{ users }}"
+
+
+    - name: Create VS Code settings directory
+      file:
+        path: "/home/{{ item.username }}/.local/share/code-server/User"
+        state: directory
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+      loop: "{{ users }}"
+
+
+    - name: Configure VS Code settings
+      template:
+        src: templates/settings.json.j2
+        dest: "/home/{{ item.username }}/.local/share/code-server/User/settings.json"
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: '0644'
+      loop: "{{ users }}"
+
+
+  handlers:
+    - name: reload nginx
+      service:
+        name: nginx
+        state: reloaded
+
+- name: Generate Access Information
+  hosts: new_droplets
+  gather_facts: yes
+  remote_user: root
+  vars_files:
+    - vars/users.yml
+
+  tasks:
+    - name: Debug host info
+      debug:
+        msg: "Host IP: {{ ansible_host }}"
+
+    - name: Set host IP fact
+      set_fact:
+        droplet_ip: "{{ inventory_hostname }}"
+
+    - name: Gather user access information
+      set_fact:
+        user_access_info: "{{ user_access_info | default([]) + [{'username': item.username, 'password': item.password, 'port': item.port}] }}"
+      loop: "{{ users }}"
+
+    - name: Generate access information file
+      template:
+        src: templates/access_info.txt.j2
+        dest: "./access_info.txt"
+      delegate_to: localhost
+      vars:
+        ansible_host: "{{ droplet_ip }}"
+        
+    - name: Display access information
+      debug:
+        msg: "Access information has been saved to access_info.txt"
