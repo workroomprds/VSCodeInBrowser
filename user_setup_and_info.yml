@@ -117,20 +117,52 @@
       when: inventory_hostname in groups['new_droplets']
 
 
+    - name: Check existing Cloudflare DNS record
+      community.general.cloudflare_dns:
+        zone: "{{ cloudflare_zone }}"
+        record: "{{ cloudflare_record }}"
+        type: A
+        value: "{{ ansible_host }}" 
+        api_token: "{{ cloudflare_api_token }}"
+      register: dns_check
+      check_mode: yes
+      ignore_errors: yes
+
+    - name: Fail if DNS record exists with different IP
+      fail:
+        msg: "DNS A record for {{ cloudflare_record }} exists but points to {{ dns_check.result.content }} instead of {{ ansible_host }}"
+      when: 
+        - dns_check is not failed 
+        - dns_check.changed == false
+        - dns_check.result.content != ansible_host
+
     - name: Configure Cloudflare DNS
       community.general.cloudflare_dns:
         zone: "{{ cloudflare_zone }}"
         record: "{{ cloudflare_record }}"
         type: A
-        #value: "{{ droplet.data[0].networks.v4 | selectattr('type', 'equalto', 'public') | map(attribute='ip_address') | first }}"
         value: "{{ ansible_host }}"
         api_token: "{{ cloudflare_api_token }}"
         proxied: yes
         state: present
 
+    - name: DNS check attempt
+      command: curl -I -s -w "%{http_code}" https://{{ cloudflare_record }}.{{ cloudflare_zone }}
+      register: website_check
+      delegate_to: localhost
+      become: no
+
+    - name: Show DNS check results
+      debug:
+        msg: "{{ website_check }}"
+      delegate_to: localhost
+
     - name: Wait for DNS propagation
-      wait_for:
-        timeout: 60
+      command: curl -I -s -w "%{http_code}" https://{{ cloudflare_record }}.{{ cloudflare_zone }}
+      register: website_check
+      until: website_check.stdout_lines[-1] == "200"
+      retries: 30
+      delay: 2
       delegate_to: localhost
       become: no
 
@@ -146,7 +178,6 @@
     - name: Start nginx
       service:
         name: nginx
-        state: started
         state: started
         
     - name: Create SSL directory
@@ -281,25 +312,31 @@
         recurse: yes
       loop: "{{ users }}"
 
-    - name: Install python3-pip  #move to droplet creation
+    - name: Check python3-venv installation
+      apt:
+        name: python3-venv
+        state: present
+      check_mode: yes
+      register: pip_check
+
+    - name: Install python3-venv
+      apt:
+        name: python3-venv
+        state: present
+      when: pip_check.changed
+
+    - name: Check python3-pip installation
       apt:
         name: python3-pip
         state: present
-        update_cache: yes
       check_mode: yes
       register: pip_check
-      
-    - name: Actually install python3-pip
+
+    - name: Install python3-pip
       apt:
         name: python3-pip
         state: present
       when: pip_check.changed
-
-    - name: Install virtualenv
-      apt:
-        name: virtualenv
-        state: present
-        update_cache: yes
 
     - name: Install llm in virtual environment
       pip:
@@ -334,6 +371,37 @@
       become_user: "{{ item.username }}"
       loop: "{{ users }}"
 
+    - name: Create template directory for llm
+      file:
+        path: "/home/{{ item.username }}/.config/io.datasette.llm/templates"
+        state: directory
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: '0755'
+      loop: "{{ users }}"
+
+    - name: Add template file to check Claude's availability
+      copy:
+        content: |
+          model: claude-3.5-sonnet
+          prompt: Are you there? Reply YES or NO
+        dest: "/home/{{ item.username }}/.config/io.datasette.llm/templates/knockknockClaude.yaml"
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: '0644'
+      loop: "{{ users }}"
+
+    - name: Add template file to do the work
+      copy:
+        content: |
+          name: rewrite_python_to_pass_tests
+          system:  You are expert at Python. You can run an internal python interpreter. You can run pytest tests. You are methodical and able to explain your choices if asked. You write clean Python 3 paying attention to PEP 8 style. Your code is readable. When asked for ONLY code, you will output only the full Python code, omitting any precursors, headings, explanation, placeholders or ellipses. Output for ONLY code should start with `#!/usr/bin/env python3`. If you need to give me a message, make it a comment in the code.
+          prompt: 'Starting from Python code in $code, output that code with changes to pass tests described in $tests. Please note that the code currently fails the tests with message $test_results. Your output will be used to replace the whole of the input code, so please output ONLY code. Ensure the code starts with a valid Python statement or definition, not with any kind of greeting or explanation. Give the code response without enclosing it in any markdown delimiters or formatting tags.' 
+        dest: "/home/{{ item.username }}/.config/io.datasette.llm/templates/rewrite_python_to_pass_tests.yaml"
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: '0644'
+      loop: "{{ users }}"
 
     - name: Create VS Code settings directory
       file:
