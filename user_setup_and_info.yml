@@ -421,6 +421,21 @@
         mode: '0644'
       loop: "{{ users }}"
 
+    - name: Check python3-pytest installation
+      apt:
+        name: python3-pytest
+        state: present
+      check_mode: yes
+      register: pytest_check
+      tags: install_pytest
+
+    - name: Install python3-pytest
+      apt:
+        name: python3-pytest
+        state: present
+        update_cache: yes
+      when: pytest_check.changed
+      tags: install_pytest
 
   handlers:
     - name: reload nginx
