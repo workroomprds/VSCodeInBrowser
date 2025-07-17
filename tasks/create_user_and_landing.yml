@@ -1,0 +1,28 @@
+- name: Create user accounts
+  user:
+    name: "{{ item.username }}"
+    password: "{{ item.password | password_hash('sha512') }}"
+    shell: /bin/bash
+    groups: sudo
+    append: yes
+    state: present
+  loop: "{{ users }}"
+
+- name: Create user landing page directories
+  file:
+    path: "/var/www/{{ item.username }}"
+    state: directory
+    mode: '0755'
+  loop: "{{ users }}"
+
+- name: Create landing pages
+  template:
+    src: "{{ playbook_dir }}/templates/user_landing.html.j2"
+    dest: "/var/www/{{ item.username }}/index.html"
+  loop: "{{ users }}"
+
+- name: Create root landing page
+  template:
+    src: "{{ playbook_dir }}/templates/root_landing.html.j2"
+    dest: /var/www/html/index.html
+    mode: '0644'

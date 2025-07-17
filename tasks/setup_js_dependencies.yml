@@ -1,0 +1,17 @@
+- name: Install Node.js and npm (if needed)
+  apt:
+    name:
+      - nodejs
+      - npm
+    state: present
+
+# Install JavaScript dependencies for each user
+- name: Install npm dependencies
+  npm:
+    path: "/home/{{ user.username }}/{{ code_directory }}/{{ web_dir }}"
+  become: yes
+  become_user: "{{ user.username }}"
+  loop: "{{ users | product(web_directories) | list }}"
+  vars:
+    user: "{{ item[0] }}"
+    web_dir: "{{ item[1] }}"

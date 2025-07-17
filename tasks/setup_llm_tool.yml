@@ -1,0 +1,97 @@
+- name: Create .llm directory for each user
+  file:
+    path: "/home/{{ item.username }}/.llm"
+    state: directory
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: '0700'
+  loop: "{{ users }}"
+  
+- name: Create llm virtual environment
+  command: python3 -m venv /home/{{ item.username }}/llm-env
+  args:
+    creates: /home/{{ item.username }}/llm-env
+  loop: "{{ users }}"
+
+- name: Set ownership of llm environment
+  file:
+    path: /home/{{ item.username }}/llm-env
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    recurse: yes
+  loop: "{{ users }}"
+
+- name: Install llm and supporting tools in virtual environment
+  pip:
+    name: 
+      - llm
+      - llm-anthropic
+      #- llm-openai – installed with llm by default
+      - pytest
+      - pytest-cov
+      - coverage
+    virtualenv: /home/{{ item.username }}/llm-env
+  become: yes
+  become_user: "{{ item.username }}"
+  loop: "{{ users }}"
+
+- name: Set up llm config for each user
+  template:
+    src: "{{ playbook_dir }}/templates/llm_config.yaml.j2"
+    dest: "/home/{{ item.username }}/.llm/config.yaml"
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: '0600'
+  loop: "{{ users }}"
+
+- name: Configure llm with API keys for anthropic and openai
+  shell: |
+    . /home/{{ item.username }}/llm-env/bin/activate && llm keys set anthropic --value {{ vars[group_name + '_anthropic'] }}
+    . /home/{{ item.username }}/llm-env/bin/activate && llm keys set openai --value {{ vars[group_name + '_openai'] }}
+  become: yes
+  become_user: "{{ item.username }}"
+  loop: "{{ users }}"
+
+- name: Create template directory for llm
+  file:
+    path: "/home/{{ item.username }}/.config/io.datasette.llm/templates"
+    state: directory
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: '0755'
+  loop: "{{ users }}"
+
+- name: Add a template file to check Claude's availability
+  copy:
+    content: |
+      model: claude-3.5-sonnet
+      prompt: Are you there? Reply YES or NO
+    dest: "/home/{{ item.username }}/.config/io.datasette.llm/templates/knockknockClaude.yaml"
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: '0644'
+  loop: "{{ users }}"
+
+- name: Add a python template file to do the work
+  copy:
+    content: |
+      name: rewrite_python_to_pass_tests
+      system:  You are expert at Python. You can run an internal python interpreter. You can run pytest tests. You are methodical and able to explain your choices if asked. You write clean Python 3 paying attention to PEP 8 style. Your code is readable. When asked for ONLY code, you will output only the full Python code, omitting any precursors, headings, explanation, placeholders or ellipses. Output for ONLY code should start with `#!/usr/bin/env python3`. If you need to give me a message, make it a comment in the code.
+      prompt: 'Starting from Python code in $code, output that code with changes to pass tests described in $tests. Please note that the code currently fails the tests with message $test_results. Your output will be used to replace the whole of the input code, so please output ONLY code. Ensure the code starts with a valid Python statement or definition, not with any kind of greeting or explanation. Give the code response without enclosing it in any markdown delimiters or formatting tags.' 
+    dest: "/home/{{ item.username }}/.config/io.datasette.llm/templates/rewrite_python_to_pass_tests.yaml"
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: '0644'
+  loop: "{{ users }}"
+
+- name: Add a javascript template file to do the work
+  copy:
+    content: |
+      name: rewrite_js_to_pass_tests
+      prompt: Starting from JavaScript code in $code, output code which has been changed to pass tests in $tests. Please note that the code currently fails the tests with message $test_results. Your output will be used to replace the whole of the input code, so please output ONLY code. Pay attention to information in $rules.
+      system: "You are expert in web development and testing, and in fixing code that fails tests. You have particular technical skills in JavaScript, HTML, CSS, test frameworks including Jest. You are methodical and able to explain your choices if asked. You write clean, standards-compliant and readable JavaScript, semantic HTML and idiomatic CSS, separating concerns as needed. When asked for ONLY code, you will output only the full JavaScript / HTML / CSS  code, omitting any precursors, headings, explanation, placeholders or ellipses. Do NOT use code fences ie three backticks and a language name. If you need to give me a message,  make it a comment in the code." 
+    dest: "/home/{{ item.username }}/.config/io.datasette.llm/templates/rewrite_js_to_pass_tests.yaml"
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: '0644'
+  loop: "{{ users }}"

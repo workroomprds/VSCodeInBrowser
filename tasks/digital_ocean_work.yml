@@ -1,0 +1,62 @@
+- name: Check for existing droplet
+  community.digitalocean.digital_ocean_droplet_info:
+    oauth_token: "{{ do_api_key }}"
+    name: "code-server-droplet-{{ group_name }}"
+  register: existing_droplet
+  failed_when: false
+
+- name: Set create flag
+  set_fact:
+    create_droplet: "{{ existing_droplet.data | default([]) | length == 0 }}"
+
+- name: show create flag
+  debug:
+    var: create_droplet
+
+- name: Get only snapshot information (no distribution images) – note that this is unlikely to work with D.O. Slugs
+  community.digitalocean.digital_ocean_snapshot_info:
+    oauth_token: "{{ do_api_key }}"
+    snapshot_type: "droplet"  # Only get droplet snapshots
+  register: snapshots_result
+  
+- name: Extract snapshot ID by name
+  set_fact:
+    snapshot_id: "{{ (snapshots_result.data | selectattr('name', 'equalto', snapshot_name) | list | first).id }}"
+  when: snapshots_result.data | selectattr('name', 'equalto', snapshot_name) | list | length > 0
+
+- name: Create droplet from snapshot
+  digital_ocean_droplet:
+    state: present       
+    image: "{{ snapshot_id }}"               
+    name: "code-server-droplet-{{ group_name }}"
+    region: "{{ do_region }}"
+    size: "{{ do_size }}"
+    ssh_keys: "{{ do_ssh_keys }}"
+    oauth_token: "{{ do_api_key }}"
+    wait_timeout: 500
+  when: create_droplet
+  register: created_droplet
+  failed_when: false  # Don't fail immediately
+
+- name: Debug droplet creation result
+  debug:
+    var: created_droplet
+  when: create_droplet
+
+- name: Fail with detailed error if droplet creation failed
+  fail:
+    msg: "Droplet creation failed: {{ created_droplet.msg | default('Unknown error') }}"
+  when: create_droplet and created_droplet.failed
+
+- name: Wait for network assignment and register droplet
+  community.digitalocean.digital_ocean_droplet_info:
+    oauth_token: "{{ do_api_key }}"
+    name: "code-server-droplet-{{ group_name }}"
+  register: droplet
+  until: droplet.data[0].networks.v4 | length > 0
+  retries: 30
+  delay: 10
+
+- name: Display droplet information
+  debug:
+    var: droplet

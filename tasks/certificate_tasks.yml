@@ -1,0 +1,54 @@
+- name: Install certbot and DNS plugins
+  apt:
+    name: 
+      - certbot
+      - python3-certbot-nginx
+      - python3-certbot-dns-cloudflare
+    state: present
+    force_apt_get: yes
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  async: 300
+  poll: 10
+  when: inventory_hostname in groups['new_droplets']
+
+- name: Create Cloudflare credentials file for certbot
+  copy:
+    content: |
+      dns_cloudflare_api_token = {{ cloudflare_api_token }}
+    dest: /etc/letsencrypt/cloudflare.ini
+    mode: '0600'
+    owner: root
+    group: root
+
+- name: Check if Let's Encrypt certificate already exists
+  stat:
+    path: "/etc/letsencrypt/live/{{ group_name }}.{{ main_domain }}/fullchain.pem"
+  register: cert_exists
+
+- name: Check certificate expiration if it exists
+  command: openssl x509 -in "/etc/letsencrypt/live/{{ group_name }}.{{ main_domain }}/fullchain.pem" -noout -checkend 2592000
+  register: cert_valid
+  failed_when: false
+  when: cert_exists.stat.exists
+
+- name: Get Let's Encrypt certificate using DNS challenge
+  command: certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini --dns-cloudflare-propagation-seconds 60 -d {{ group_name }}.{{ main_domain }} --email {{ certbot_email }} --agree-tos --non-interactive
+  when: not cert_exists.stat.exists or (cert_exists.stat.exists and cert_valid.rc != 0)
+  notify: reload nginx
+
+- name: Display certificate status
+  debug:
+    msg: "Certificate for {{ group_name }}.{{ main_domain }} {{ 'already exists and is valid' if (cert_exists.stat.exists and cert_valid.rc == 0) else 'was created/renewed' }}"
+
+- name: Create SSL directory
+  file:
+    path: /etc/nginx/ssl
+    state: directory
+    mode: '0755'
+
+- name: Update nginx template for SSL
+  template:
+    src: "{{ playbook_dir }}/templates/nginx_ssl.conf.j2"
+    dest: /etc/nginx/sites-available/code-server
+  notify: reload nginx

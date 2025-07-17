@@ -1,0 +1,60 @@
+- name: Create Python virtual environment for Flask apps
+  command: python3 -m venv /home/{{ user.username }}/{{ code_directory }}/{{ flask_dir }}/venv
+  args:
+    creates: /home/{{ user.username }}/{{ code_directory }}/{{ flask_dir }}/venv
+  become: yes
+  become_user: "{{ user.username }}"
+  loop: "{{ users | product(flask_directories) | list }}"
+  vars:
+    user: "{{ item[0] }}"
+    flask_dir: "{{ item[1] }}"
+  when: item[1] != "initial_python"
+
+- name: Set ownership of Flask virtual environments
+  file:
+    path: "/home/{{ user.username }}/{{ code_directory }}/{{ flask_dir }}/venv"
+    owner: "{{ user.username }}"
+    group: "{{ user.username }}"
+    recurse: yes
+  loop: "{{ users | product(flask_directories) | list }}"
+  vars:
+    user: "{{ item[0] }}"
+    flask_dir: "{{ item[1] }}"
+
+# Install Python requirements for each Flask directory
+- name: Install Python requirements for Flask apps
+  pip:
+    requirements: "/home/{{ user.username }}/{{ code_directory }}/{{ flask_dir }}/requirements.txt"
+    virtualenv: "/home/{{ user.username }}/{{ code_directory }}/{{ flask_dir }}/venv"
+  become: yes
+  become_user: "{{ user.username }}"
+  loop: "{{ users | product(flask_directories) | list }}"
+  vars:
+    user: "{{ item[0] }}"
+    flask_dir: "{{ item[1] }}"
+  when: item[1] != "initial_python"
+
+# Create systemd services for Flask apps
+- name: Create Flask app systemd service for each user and Flask directory
+  template:
+    src: templates/flask-app.service.j2
+    dest: "/etc/systemd/system/flask-{{ user.username }}-{{ flask_dir }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ users | product(flask_directories) | list }}"
+  vars:
+    user: "{{ item[0] }}"
+    flask_dir: "{{ item[1] }}"
+  when: item[1] != "initial_python"
+  notify: reload systemd
+
+# Start and enable Flask services
+- name: Start and enable Flask services
+  systemd:
+    name: "flask-{{ item[0].username }}-{{ item[1] }}"
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  loop: "{{ users | product(flask_directories) | list }}"
+  when: item[1] != "initial_python"

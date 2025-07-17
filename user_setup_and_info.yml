@@ -10,55 +10,17 @@
 
 
   tasks:
-    - name: Check for existing droplet
-      community.digitalocean.digital_ocean_droplet_info:
-        oauth_token: "{{ do_api_key }}"
-        name: "code-server-droplet-01"
-      register: existing_droplet
-      failed_when: false
+    - name: Work with Digital Ocean to set up a new droplet from snapshot
+      include_tasks: tasks/digital_ocean_work.yml
 
-    - name: Set create flag
-      set_fact:
-        create_droplet: "{{ existing_droplet.data | default([]) | length == 0 }}"
-
-    - name: show create flag
-      debug:
-        var: create_droplet
-
-    - name: Create droplet from snapshot
-      digital_ocean_droplet:
-        state: present                      
-        name: code-server-droplet-01
-        image: code-server-droplet-u22-base-20250202
-        region: "{{ do_region }}"
-        size: "{{ do_size }}"
-        image: "{{ do_image }}"
-        ssh_keys: "{{ do_ssh_keys }}"
-        oauth_token: "{{ do_api_key }}"
-        wait_timeout: 500
-      when: create_droplet
-      register: created_droplet
-
-    - name: Wait for network assignment and register droplet
-      community.digitalocean.digital_ocean_droplet_info:
-        oauth_token: "{{ do_api_key }}"
-        name: "code-server-droplet-01"
-      register: droplet
-      until: droplet.data[0].networks.v4 | length > 0
-      retries: 30
-      delay: 10
-
-    - name: Display droplet information
-      debug:
-        var: droplet
-
-
-    - name: Wait for SSH to come up
+    - name: Wait for droplet to be ready (for SSH to come up)
       wait_for:
         host: "{{ droplet.data[0].networks.v4 | selectattr('type', 'equalto', 'public') | map(attribute='ip_address') | first }}"
         port: 22
-        delay: 10
-        timeout: 320
+        delay: 2
+        timeout: 90
+        connect_timeout: 3
+        sleep: 1
 
     - name: Add new host to inventory
       add_host:
@@ -66,8 +28,38 @@
         groups: new_droplets
         ansible_ssh_private_key_file: "{{ ssh_private_key_file }}"
 
+- name: set up nginx, DNS and SSL
+  hosts: new_droplets
+  become: yes
+  remote_user: root
+  vars_files:
+    - secrets.yml  # This file should be encrypted with ansible-vault
+    - vars/main.yml
+    - vars/users.yml
+    - vars/cloudflare.yml
+    - vars/ssl.yml
 
-- name: Configure users for code-server and set up Claude API keys
+  tasks:
+    - name: Install nginx if not already installed
+      include_tasks: tasks/setup_nginx_base.yml
+
+    - name: Check / set up Cloudflare DNS record
+      include_tasks: tasks/cloudflare_work.yml
+
+    - name: Check / set up Let's Encrypt certificate
+      include_tasks: tasks/certificate_tasks.yml
+
+    - name: Insall Ansible globally
+      include_tasks: tasks/setup_ansible.yml
+
+  handlers:
+    - name: reload nginx
+      service:
+        name: nginx
+        state: reloaded
+   
+
+- name: Configure users for code-server and set up tools
   hosts: new_droplets
   become: yes
   remote_user: root
@@ -80,402 +72,46 @@
 
   tasks:
 
-    - name: Check nginx installation
-      command: dpkg -l nginx
-      register: nginx_check
-      changed_when: false
-      failed_when: false
-
-    - name: Install nginx
-      apt:
-        name: nginx
-        state: present
-        update_cache: yes
-      register: nginx_install
-      when: nginx_check.rc != 0
-
-    - name: Create Nginx conf.d directory
-      file:
-        path: /etc/nginx/conf.d
-        state: directory
-        mode: '0755'
-        owner: root
-        group: root
-
-    # Add to the existing package installation tasks:
-    - name: Install certbot and DNS plugins
-      apt:
-        name: 
-          - certbot
-          - python3-certbot-nginx
-        state: present
-        force_apt_get: yes
-      environment:
-        DEBIAN_FRONTEND: noninteractive
-      async: 300
-      poll: 10
-      when: inventory_hostname in groups['new_droplets']
-
-
-    - name: Check existing Cloudflare DNS record
-      community.general.cloudflare_dns:
-        zone: "{{ cloudflare_zone }}"
-        record: "{{ cloudflare_record }}"
-        type: A
-        value: "{{ ansible_host }}" 
-        api_token: "{{ cloudflare_api_token }}"
-      register: dns_check
-      check_mode: yes
-      ignore_errors: yes
-
-    - name: Fail if DNS record exists with different IP
-      fail:
-        msg: "DNS A record for {{ cloudflare_record }} exists but points to {{ dns_check.result.content }} instead of {{ ansible_host }}"
-      when: 
-        - dns_check is not failed 
-        - dns_check.changed == false
-        - dns_check.result.content != ansible_host
-
-    - name: Configure Cloudflare DNS
-      community.general.cloudflare_dns:
-        zone: "{{ cloudflare_zone }}"
-        record: "{{ cloudflare_record }}"
-        type: A
-        value: "{{ ansible_host }}"
-        api_token: "{{ cloudflare_api_token }}"
-        proxied: yes
-        state: present
-
-    - name: DNS check attempt
-      command: curl -I -s -w "%{http_code}" https://{{ cloudflare_record }}.{{ cloudflare_zone }}
-      register: website_check
-      delegate_to: localhost
-      become: no
-
-    - name: Show DNS check results
-      debug:
-        msg: "{{ website_check }}"
-      delegate_to: localhost
-
-    - name: Wait for DNS propagation
-      command: curl -I -s -w "%{http_code}" https://{{ cloudflare_record }}.{{ cloudflare_zone }}
-      register: website_check
-      until: website_check.stdout_lines[-1] == "200"
-      retries: 30
-      delay: 2
-      delegate_to: localhost
-      become: no
-
-    - name: Stop nginx for certbot
-      service:
-        name: nginx
-        state: stopped
-
-    - name: Get Let's Encrypt certificate
-      command: certbot certonly --standalone -d {{ ssl_domain }} --email {{ certbot_email }} --agree-tos --non-interactive
-      notify: reload nginx
-
-    - name: Start nginx
-      service:
-        name: nginx
-        state: started
-        
-    - name: Create SSL directory
-      file:
-        path: /etc/nginx/ssl
-        state: directory
-        mode: '0755'
-
-    - name: Update nginx template for SSL
-      template:
-        src: templates/nginx_ssl.conf.j2
-        dest: /etc/nginx/sites-available/code-server
-      notify: reload nginx
-
-    - name: Configure Nginx proxy locations for users
-      template:
-        src: templates/user_proxy_locations.conf.j2
-        dest: /etc/nginx/conf.d/user_proxy_locations.conf
-        owner: root
-        group: root
-        mode: '0644'
-      notify: reload nginx
-
-    - name: Remove default nginx site
-      file:
-        path: /etc/nginx/sites-enabled/default
-        state: absent
-      notify: reload nginx
-
-    - name: Force all notified handlers to run at this point
+    - name: Double-check Ngnix install by forcing all notified handlers to run at this point
       meta: flush_handlers
 
-    - name: Install code-server
-      shell: curl -fsSL https://code-server.dev/install.sh | sh
-      args:
-        creates: /usr/bin/code-server
+    - name: Create user accounts and landing pages
+      include_tasks: tasks/create_user_and_landing.yml
 
-    - name: Create user accounts
-      user:
-        name: "{{ item.username }}"
-        password: "{{ item.password | password_hash('sha512') }}"
-        shell: /bin/bash
-        groups: sudo
-        append: yes
-        state: present
-      loop: "{{ users }}"
+    - name: Configure Nginx for users
+      include_tasks: tasks/setup_nginx_for_multiple_users.yml
 
-    - name: Create user landing page directories
-      file:
-        path: "/var/www/{{ item.username }}"
-        state: directory
-        mode: '0755'
-      loop: "{{ users }}"
+    - name: Install code-server and set up for each user
+      include_tasks: tasks/setup_code_server.yml
 
-    - name: Create landing pages
-      template:
-        src: templates/user_landing.html.j2
-        dest: "/var/www/{{ item.username }}/index.html"
-      loop: "{{ users }}"
+    - name: Install python and parts for each user
+      include_tasks: tasks/setup_python.yml
+  
+    - name: set up LLM tool (and keys) for each user
+      include_tasks: tasks/setup_llm_tool.yml
 
-    - name: Create root landing page
-      template:
-        src: templates/root_landing.html.j2
-        dest: /var/www/html/index.html
-        mode: '0644'
+    - name: set up git and gitignore for each user
+      include_tasks: tasks/setup_git.yml
 
-    - name: Create code-server config directories
-      file:
-        path: "/home/{{ item.username }}/.config/code-server"
-        state: directory
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0755'
-      loop: "{{ users }}"
+    - name: Clone repo set permissions and commit - for each user
+      include_tasks: tasks/clone_adjust_and_commit.yml
 
-    - name: Create code-server configs
-      template:
-        src: templates/code-server-config.yaml.j2
-        dest: "/home/{{ item.username }}/.config/code-server/config.yaml"
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0600'
-      loop: "{{ users }}"
+    ## After the repo is available, install Node.js and npm. Then install dependencies
+    - name: install the repo's javascript dependencies
+      include_tasks: tasks/setup_js_dependencies.yml
 
-    - name: Set up code-server service for each user
-      template:
-        src: templates/code-server.service.j2
-        dest: "/etc/systemd/system/code-server@{{ item.username }}.service"
-      loop: "{{ users }}"
-
-    - name: Start and enable code-server services
-      systemd:
-        name: "code-server@{{ item.username }}"
-        state: started
-        enabled: yes
-      loop: "{{ users }}"
-
-    - name: Create .llm directory for each user
-      file:
-        path: "/home/{{ item.username }}/.llm"
-        state: directory
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0700'
-      loop: "{{ users }}"
-
-    - name: Install python3-venv  #move to droplet creation
-      apt:
-        name: python3-venv
-        state: present
-        update_cache: yes
-      check_mode: yes
-      register: pip_check
-      
-    - name: Actually install python3-venv
-      apt:
-        name: python3-venv
-        state: present
-      when: pip_check.changed
-
-    - name: Create llm virtual environment
-      command: python3 -m venv /home/{{ item.username }}/llm-env
-      args:
-        creates: /home/{{ item.username }}/llm-env
-      loop: "{{ users }}"
-
-    - name: Set ownership of llm environment
-      file:
-        path: /home/{{ item.username }}/llm-env
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        recurse: yes
-      loop: "{{ users }}"
-
-    - name: Check python3-venv installation
-      apt:
-        name: python3-venv
-        state: present
-      check_mode: yes
-      register: pip_check
-
-    - name: Install python3-venv
-      apt:
-        name: python3-venv
-        state: present
-      when: pip_check.changed
-
-    - name: Check python3-pip installation
-      apt:
-        name: python3-pip
-        state: present
-      check_mode: yes
-      register: pip_check
-
-    - name: Install python3-pip
-      apt:
-        name: python3-pip
-        state: present
-      when: pip_check.changed
-
-    - name: Install llm in virtual environment
-      pip:
-        name: llm
-        virtualenv: /home/{{ item.username }}/llm-env
-      become: yes
-      become_user: "{{ item.username }}"
-      loop: "{{ users }}"
-
-    - name: Set up llm config for each user
-      template:
-        src: templates/llm_config.yaml.j2
-        dest: "/home/{{ item.username }}/.llm/config.yaml"
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0600'
-      loop: "{{ users }}"
-
-    - name: Install llm-anthropic for each user
-      shell: |
-        . /home/{{ item.username }}/llm-env/bin/activate && llm install llm-anthropic
-      args:
-        executable: /bin/bash
-      become: yes
-      become_user: "{{ item.username }}"
-      loop: "{{ users }}"
-
-    - name: Configure llm with Anthropic API key
-      shell: |
-        . /home/{{ item.username }}/llm-env/bin/activate && llm keys set anthropic --value {{ claude_key }}
-      become: yes
-      become_user: "{{ item.username }}"
-      loop: "{{ users }}"
-
-    - name: Create template directory for llm
-      file:
-        path: "/home/{{ item.username }}/.config/io.datasette.llm/templates"
-        state: directory
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0755'
-      loop: "{{ users }}"
-
-    - name: Add template file to check Claude's availability
-      copy:
-        content: |
-          model: claude-3.5-sonnet
-          prompt: Are you there? Reply YES or NO
-        dest: "/home/{{ item.username }}/.config/io.datasette.llm/templates/knockknockClaude.yaml"
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0644'
-      loop: "{{ users }}"
-
-    - name: Add template file to do the work
-      copy:
-        content: |
-          name: rewrite_python_to_pass_tests
-          system:  You are expert at Python. You can run an internal python interpreter. You can run pytest tests. You are methodical and able to explain your choices if asked. You write clean Python 3 paying attention to PEP 8 style. Your code is readable. When asked for ONLY code, you will output only the full Python code, omitting any precursors, headings, explanation, placeholders or ellipses. Output for ONLY code should start with `#!/usr/bin/env python3`. If you need to give me a message, make it a comment in the code.
-          prompt: 'Starting from Python code in $code, output that code with changes to pass tests described in $tests. Please note that the code currently fails the tests with message $test_results. Your output will be used to replace the whole of the input code, so please output ONLY code. Ensure the code starts with a valid Python statement or definition, not with any kind of greeting or explanation. Give the code response without enclosing it in any markdown delimiters or formatting tags.' 
-        dest: "/home/{{ item.username }}/.config/io.datasette.llm/templates/rewrite_python_to_pass_tests.yaml"
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0644'
-      loop: "{{ users }}"
-
-    - name: Create VS Code settings directory
-      file:
-        path: "/home/{{ item.username }}/.local/share/code-server/User"
-        state: directory
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-      loop: "{{ users }}"
-
-
-    - name: Configure VS Code settings
-      template:
-        src: templates/settings.json.j2
-        dest: "/home/{{ item.username }}/.local/share/code-server/User/settings.json"
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0644'
-      loop: "{{ users }}"
-
-    - name: Check python3-pytest installation
-      apt:
-        name:
-          - python3-pytest
-          - python3-pytest-cov
-        state: present
-      check_mode: yes
-      register: pytest_check
-      tags: install_pytest
-
-    - name: Install python3-pytest
-      apt:
-        name:
-          - python3-pytest
-          - python3-pytest-cov
-        state: present
-        update_cache: yes
-      when: pytest_check.changed
-      tags: install_pytest
+    - name: Create Python virtual environment for each Flask directory (from imported reqirements.txt)
+      include_tasks: tasks/setup_flask.yml
 
   handlers:
     - name: reload nginx
       service:
         name: nginx
         state: reloaded
-
-- name: Generate Access Information
-  hosts: new_droplets
-  gather_facts: yes
-  remote_user: root
-  vars_files:
-    - vars/users.yml
-
-  tasks:
-    - name: Debug host info
-      debug:
-        msg: "Host IP: {{ ansible_host }}"
-
-    - name: Set host IP fact
-      set_fact:
-        droplet_ip: "{{ inventory_hostname }}"
-
-    - name: Gather user access information
-      set_fact:
-        user_access_info: "{{ user_access_info | default([]) + [{'username': item.username, 'password': item.password, 'port': item.port}] }}"
-      loop: "{{ users }}"
-
-    - name: Generate access information file
-      template:
-        src: templates/access_info.txt.j2
-        dest: "./access_info.txt"
-      delegate_to: localhost
-      vars:
-        ansible_host: "{{ droplet_ip }}"
         
-    - name: Display access information
-      debug:
-        msg: "Access information has been saved to access_info.txt"
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+- name: Import access information generation playbook
+  import_playbook: generate_access_info.yml

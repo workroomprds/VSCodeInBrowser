@@ -1,0 +1,50 @@
+- name: Clone repository for each user
+  git:
+    repo: "{{ git_repo_url }}"
+    dest: "/home/{{ item.username }}/{{ code_directory }}"
+    clone: yes
+    update: yes
+    force: yes
+  become: yes
+  become_user: "{{ item.username }}"
+  loop: "{{ users }}"
+
+  
+- name: Set correct ownership for cloned repository
+  file:
+    path: "/home/{{ item.username }}/{{ code_directory }}"
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    recurse: yes
+  loop: "{{ users }}"
+
+- name: Set execute permission on user home directories
+  file:
+    path: "/home/{{ item.username }}"
+    mode: '0755'
+  loop: "{{ users }}"
+
+
+- name: Set permissions on code directory and all subdirectories for nginx access
+  file:
+    path: "/home/{{ item.username }}/{{ code_directory }}"
+    mode: '0755'
+    state: directory
+    recurse: yes
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+  loop: "{{ users }}"
+
+
+- name: Stage and commit all changes
+  shell: |
+    cd "/home/{{ item.username }}/{{ code_directory }}" && \
+      git add . && \
+      git commit -m "local commit following ownership / permission changes"
+  become: yes
+  become_user: "{{ item.username }}"
+  loop: "{{ users }}"
+  register: git_commit_result
+  failed_when: 
+    - git_commit_result.rc != 0
+    - "'nothing to commit' not in git_commit_result.stdout"

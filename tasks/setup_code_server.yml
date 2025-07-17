@@ -1,0 +1,52 @@
+- name: Install code-server
+  shell: curl -fsSL https://code-server.dev/install.sh | sh
+  args:
+    creates: /usr/bin/code-server
+
+- name: Create code-server config directories
+  file:
+    path: "/home/{{ item.username }}/.config/code-server"
+    state: directory
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: '0755'
+  loop: "{{ users }}"
+
+- name: Create code-server configs
+  template:
+    src: templates/code-server-config.yaml.j2
+    dest: "/home/{{ item.username }}/.config/code-server/config.yaml"
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: '0600'
+  loop: "{{ users }}"
+
+- name: Set up code-server service for each user
+  template:
+    src: templates/code-server.service.j2
+    dest: "/etc/systemd/system/code-server@{{ item.username }}.service"
+  loop: "{{ users }}"
+
+- name: Create VS Code settings directory
+  file:
+    path: "/home/{{ item.username }}/.local/share/code-server/User"
+    state: directory
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+  loop: "{{ users }}"
+
+- name: Configure VS Code settings
+  template:
+    src: templates/settings.json.j2
+    dest: "/home/{{ item.username }}/.local/share/code-server/User/settings.json"
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: '0644'
+  loop: "{{ users }}"
+
+- name: Start and enable code-server services
+  systemd:
+    name: "code-server@{{ item.username }}"
+    state: started
+    enabled: yes
+  loop: "{{ users }}"

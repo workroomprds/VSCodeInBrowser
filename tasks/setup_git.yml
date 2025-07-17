@@ -1,0 +1,50 @@
+- name: Configure Git for each user ## only for local – if remote we'd need a username and pw
+  shell: |
+    su - {{ item.username }} -c "git config --global user.name \"{{ item.username }}\""
+    su - {{ item.username }} -c "git config --global user.email {{ item.username }}@{{ group_name }}.{{ main_domain }}"
+  loop: "{{ users }}"
+
+- name: Set up global .gitignore for each user
+  copy:
+    content: |
+      # Node.js dependencies
+      node_modules/
+      npm-debug.log*
+      yarn-debug.log*
+      yarn-error.log*
+      
+      # Python virtual environments
+      venv/
+      __pycache__/
+      *.pyc
+      *.pyo
+      *.pyd
+      
+      # IDE files
+      .vscode/
+      .idea/
+      *.swp
+      *.swo
+      
+      # OS files
+      .DS_Store
+      Thumbs.db
+      desktop.ini
+      
+      # Log files
+      *.log
+      coverage/
+      
+      # Environment files
+      .env
+      .env.local
+    dest: "/home/{{ item.username }}/.gitignore_global"
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: '0644'
+  loop: "{{ users }}"
+
+- name: Configure global gitignore for each user
+  shell: |
+    su - {{ item.username }} -c "git config --global core.excludesfile ~/.gitignore_global"
+  loop: "{{ users }}"

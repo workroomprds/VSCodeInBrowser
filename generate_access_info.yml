@@ -1,0 +1,32 @@
+- name: Generate Access Information
+  hosts: new_droplets
+  gather_facts: yes
+  remote_user: root
+  vars_files:
+    - vars/users.yml
+
+  tasks:
+    - name: Debug host info
+      debug:
+        msg: "Host IP: {{ ansible_host }}"
+
+    - name: Set host IP fact
+      set_fact:
+        droplet_ip: "{{ inventory_hostname }}"
+
+    - name: Gather user access information
+      set_fact:
+        user_access_info: "{{ user_access_info | default([]) + [{'username': item.username, 'password': item.password, 'port': item.port}] }}"
+      loop: "{{ users }}"
+
+    - name: Generate access information file
+      template:
+        src: templates/access_info.txt.j2
+        dest: "./access_info.txt"
+      delegate_to: localhost
+      vars:
+        ansible_host: "{{ droplet_ip }}"
+        
+    - name: Display access information
+      debug:
+        msg: "Access information has been saved to access_info.txt"

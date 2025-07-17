@@ -1,0 +1,57 @@
+- name: Update package cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install software-properties-common for adding repositories
+  apt:
+    name: software-properties-common
+    state: present
+
+- name: Add Ansible PPA repository
+  apt_repository:
+    repo: ppa:ansible/ansible
+    state: present
+    update_cache: yes
+
+- name: Install Ansible
+  apt:
+    name: ansible
+    state: present
+    force_apt_get: yes
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Install additional Python dependencies
+  pip:
+    name:
+      - requests
+      - netaddr  # Useful for network operations
+    state: present
+
+- name: Check if community collections are already installed system-wide
+  command: ansible-galaxy collection list {{ item }}
+  register: collection_check
+  failed_when: false
+  changed_when: false
+  become: yes
+  loop:
+    - community.general
+    - community.digitalocean
+
+- name: Install Ansible community collections system-wide
+  command: ansible-galaxy collection install {{ item.item }} --force
+  when: item.rc != 0
+  become: yes
+  loop: "{{ collection_check.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Verify Ansible installation
+  command: ansible --version
+  register: ansible_version
+  changed_when: false
+
+- name: Display Ansible version
+  debug:
+    var: ansible_version.stdout_lines

@@ -1,0 +1,54 @@
+- name: Check existing Cloudflare DNS record
+  community.general.cloudflare_dns:
+    zone: "{{ cloudflare_zone }}"
+    record: "{{ cloudflare_record }}"
+    type: A
+    value: "{{ ansible_host }}" 
+    api_token: "{{ cloudflare_api_token }}"
+  register: dns_check
+  check_mode: yes
+  ignore_errors: yes
+
+- name: Debug DNS check response
+  debug:
+    var: dns_check
+
+- name: Fail if DNS record exists with different IP 
+  # note: may be a disconnect between result and record perhaps depending on whether debug or no debug
+  fail:
+    msg: "DNS A record for {{ cloudflare_record }} exists but points to {{ dns_check.record.content | default('unknown') }} instead of {{ ansible_host }}"
+  when: 
+    - dns_check is not failed 
+    - dns_check.changed == false
+    - dns_check.record.content is defined
+    - dns_check.record.content != ansible_host
+
+- name: Configure Cloudflare DNS
+  community.general.cloudflare_dns:
+    zone: "{{ cloudflare_zone }}"
+    record: "{{ cloudflare_record }}"
+    type: A
+    value: "{{ ansible_host }}"
+    api_token: "{{ cloudflare_api_token }}"
+    proxied: no ## disables cacheing and security features
+    state: present
+
+- name: DNS check attempt
+  command: curl -I -s -w "%{http_code}" -k http://{{ cloudflare_record }}.{{ cloudflare_zone }}
+  register: website_check
+  delegate_to: localhost
+  become: no
+
+- name: Show DNS check results
+  debug:
+    msg: "{{ website_check }}"
+  delegate_to: localhost
+
+- name: Wait for DNS propagation # http not https as we're not properly doing ssl with Let's Encrypt while developing
+  command: curl -I -s -w "%{http_code}" -L http://{{ cloudflare_record }}.{{ cloudflare_zone }}
+  register: website_check
+  until: website_check.stdout_lines[-1] == "200"
+  retries: 30
+  delay: 2
+  delegate_to: localhost
+  become: no
