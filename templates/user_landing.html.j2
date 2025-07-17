@@ -6,27 +6,90 @@
         body {
             font-family: Arial, sans-serif;
             margin: 40px;
+            background-color: #f5f5f5;
         }
         .container {
             max-width: 800px;
             margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
         .button {
             display: inline-block;
-            padding: 10px 20px;
+            padding: 12px 24px;
             background-color: #007bff;
             color: white;
             text-decoration: none;
             border-radius: 5px;
-            margin-top: 20px;
+            margin: 10px 10px 10px 0;
+            transition: background-color 0.3s;
+        }
+        .button:hover {
+            background-color: #0056b3;
+        }
+        .button.secondary {
+            background-color: #6c757d;
+        }
+        .button.secondary:hover {
+            background-color: #545b62;
+        }
+        .section {
+            margin: 30px 0;
+        }
+        .web-links {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }
+        h2 {
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 5px;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Welcome {{ item.username }}</h1>
-        <p>Your code-server instance is ready to use.</p>
-        <a href="/{{ item.username }}/code-server/" class="button">Launch Code Server</a>
+        <p>Your development environment is ready to use.</p>
+        
+        <div class="section">
+            <h2>Development Tools</h2>
+            <a href="/{{ item.username }}/code-server/" class="button">Launch Code Server</a>
+        </div>
+
+        <div class="section">
+            <h2>Flask Applications</h2>
+            <p>Your Flask web applications (ignore initial_python if present):</p>
+            <div class="web-links">
+                {% for flaskdir in flask_directories %}
+                <a href="/{{ item.username }}/{{ code_directory }}/{{ flaskdir }}/app/" class="button">{{ flaskdir }} App</a>
+                <!-- <a href="/{{ item.username }}/{{ code_directory }}/{{ flaskdir }}/" class="button secondary">{{ flaskdir }} Files</a> -->
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Web Directories</h2>
+            <p>Your static web content directories:</p>
+            <div class="web-links">
+                {% for webdir in web_directories %}
+                <a href="/{{ item.username }}/{{ code_directory }}/{{ webdir }}/" class="button secondary">{{ webdir }}</a>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Quick Start</h2>
+            <p>To get started:</p>
+            <ol>
+                <li>Click "Launch Code Server" to open your development environment</li>
+                <li>Access your web content using the links above</li>
+            </ol>
+        </div>
     </div>
 </body>
 </html>

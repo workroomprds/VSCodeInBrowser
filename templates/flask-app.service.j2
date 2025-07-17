@@ -1,0 +1,15 @@
+[Unit]
+Description=Gunicorn instance to serve {{ user.username }} Flask application in {{ flask_dir }}
+After=network.target
+
+[Service]
+User={{ user.username }}
+Group={{ user.username }}
+WorkingDirectory=/home/{{ user.username }}/{{ code_directory }}/{{ flask_dir }}
+Environment="PATH=/home/{{ user.username }}/{{ code_directory }}/{{ flask_dir }}/venv/bin"
+ExecStart=/home/{{ user.username }}/{{ code_directory }}/{{ flask_dir }}/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:{{ user[flask_dir + '_port'] }} wsgi:app
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

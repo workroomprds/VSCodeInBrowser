@@ -1,10 +1,10 @@
 server {
     listen 80;
     listen 443 ssl;
-    server_name {{ ansible_host }};
+    server_name {{ group_name }}.{{ main_domain }};
 
-    ssl_certificate /etc/letsencrypt/live/envs.workroomprds.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/envs.workroomprds.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/{{ group_name }}.{{ main_domain }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ group_name }}.{{ main_domain }}/privkey.pem;
 
     root /var/www/html;  
     index index.html; 
@@ -22,5 +22,34 @@ server {
         proxy_set_header Connection upgrade;
         proxy_set_header Accept-Encoding gzip;
     }
+    
+    # Regular web directories (static files)
+    {% for webdir in web_directories %}
+    location /{{ user.username }}/{{ code_directory }}/{{ webdir }}/ {
+        alias /home/{{ user.username }}/{{ code_directory }}/{{ webdir }}/;
+        try_files $uri $uri/ $uri/index.html =404;
+        autoindex on;
+    }
+    {% endfor %}
+
+    # Flask directories
+    {% for flaskdir in flask_directories %}
+    # Flask app proxy
+    location /{{ user.username }}/{{ code_directory }}/{{ flaskdir }}/app/ {
+        proxy_pass http://127.0.0.1:{{ user[flaskdir + '_port'] }}/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    
+    # Static files for Flask directory
+    location /{{ user.username }}/{{ code_directory }}/{{ flaskdir }}/ {
+        alias /home/{{ user.username }}/{{ code_directory }}/{{ flaskdir }}/;
+        try_files $uri $uri/ =404;
+        autoindex on;
+    }
+    {% endfor %}
+
     {% endfor %}
 }

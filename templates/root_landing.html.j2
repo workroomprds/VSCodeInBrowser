@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Code Server Access Information</title>
+    <title>For {{ group_name }}</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -21,11 +21,11 @@
 </head>
 <body>
     <div class="container">
-        <h1>Code Server Access Information</h1>
+        <h1>For {{ group_name }}</h1>
         {% for user in users %}
         <div class="user-info">
             <h2>{{ user.username }}</h2>
-            <p>Access your code server at: <a href="/{{ user.username }}/">/{{ user.username }}/</a></p>
+            <p>Access your environment at: <a href="/{{ user.username }}/">/{{ user.username }}/</a></p>
             <p>Password: {{ user.password }}</p>
         </div>
         {% endfor %}

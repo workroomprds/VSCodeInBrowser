@@ -2,7 +2,9 @@
 # DigitalOcean Droplet Configuration (slugs at https://slugs.do-api.dev )
 do_region: "lon1"  # Replace with your preferred region
 do_size: "s-2vcpu-4gb"  # Replace with your preferred droplet size
-do_image: "ubuntu-24-04-x64"  # Replace with your preferred OS image
+#do_image: "code-server-droplet-u22-base-20250202"  # Replace with your preferred droplet or OS image
+#do_image: "177515767"  # Replace with your preferred droplet or OS image
+snapshot_name: "code-server-droplet-u22-base-20250711" # Replace with your preferred snapshot name – but note that this is unlikely to work with D.O. Slugs
 do_ssh_keys: 
   - "56:ec:54:5d:9f:c2:4a:ad:0f:e0:09:ad:f2:a7:05:23"  # Replace with your SSH key fingerprint
 
@@ -23,6 +25,12 @@ pip_version: "21.3.1"  # Adjust as needed
 nodejs_version: "14.x"  # Adjust as needed
 npm_version: "6.14.15"  # Adjust as needed
 
+# Git Repository Configuration
+git_repo_url: "https://github.com/workroomprds/GenFromTestsTrial.git" 
+
+# top level directory under ~
+code_directory: "code"
+
 # LLM Configuration
 # use the latest
 
@@ -34,4 +42,27 @@ ufw_allowed_ports:
 
 # Any other global variables you might need
 ssl_enabled: true
-domain: "envs.workroomprds.com"
+staging_flag: "" ##remove staging flag --staging for production
+main_domain: "workroomprds.com"
+group_name: "group01"
+  #- "group01"
+  #- "group02"
+  #- "group03"
+  #- "group04"
+  #- "group05"
+  #- "group06"
+  #- "group07"
+  #- "group08"
+  #- "group09"
+  #- "group10"
+  #- "group11"
+  #- "group12"
+  #- "group13"
+  #- "group14"
+
+web_directories:
+  - rs_js
+
+flask_directories:
+  - initial_python
+  - rs_py
