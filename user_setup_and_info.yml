@@ -423,7 +423,9 @@
 
     - name: Check python3-pytest installation
       apt:
-        name: python3-pytest
+        name:
+          - python3-pytest
+          - python3-pytest-cov
         state: present
       check_mode: yes
       register: pytest_check
@@ -431,7 +433,9 @@
 
     - name: Install python3-pytest
       apt:
-        name: python3-pytest
+        name:
+          - python3-pytest
+          - python3-pytest-cov
         state: present
         update_cache: yes
       when: pytest_check.changed
