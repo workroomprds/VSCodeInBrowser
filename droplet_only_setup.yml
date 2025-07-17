@@ -5,7 +5,6 @@
   remote_user: root
   vars_files:
     - vars/main.yml
-    #- vars/users.yml removed dependency in templates
     - secrets.yml  # This file should be encrypted with ansible-vault
 
   tasks:
@@ -46,7 +45,6 @@
         oauth_token: "{{ do_api_key }}"
         name: "code-server-droplet-u22-base"
       register: droplet
-      #until: droplet_info.data.droplet.networks.v4 | length > 0
       until: droplet.data[0].networks.v4 | length > 0
       retries: 30
       delay: 10
@@ -74,7 +72,6 @@
   remote_user: root
   vars_files:
     - vars/main.yml
-    - vars/users.yml
 
   tasks:
 
@@ -82,75 +79,40 @@
       command: cloud-init status --wait
       changed_when: false
 
-    - name: Check for running apt/dpkg processes
-      shell: ps aux | grep -E 'apt|dpkg' | grep -v grep
-      register: apt_processes
+    - name: Check for running apt processes
+      shell: ps aux | grep -i apt
+      register: apt_check
       changed_when: false
-      failed_when: false
 
-    - name: Display running apt/dpkg processes
+    - name: Display apt processes
       debug:
-        msg: "Running apt/dpkg processes: {{ apt_processes.stdout_lines }}"
-      when: apt_processes.stdout != ""
 
-    - name: Check lock file status
-      stat:
-        path: /var/lib/dpkg/lock-frontend
-      register: lock_status
 
-    - name: Check processes holding the APT lock
-      shell: lsof /var/lib/dpkg/lock-frontend | awk 'NR>1 {print $2}'
-      register: lock_processes
-      changed_when: false
-      failed_when: false
-      when: lock_status.stat.exists
-
-    - name: Display processes holding the lock
-      debug:
-        msg: "Processes holding the APT lock: {{ lock_processes.stdout_lines | join(', ') }}"
-      when: lock_status.stat.exists and lock_processes.stdout != ""
-
-    - name: Check if lock file is stale
-      set_fact:
-        lock_is_stale: "{{ lock_status.stat.exists and lock_processes.stdout == '' and apt_processes.stdout == '' }}"
-
-    - name: Display warning about stale lock
-      debug:
-        msg: "WARNING: APT lock file exists but no processes are holding it. This may be a stale lock."
-      when: lock_is_stale
-
-    - name: Check lock file status
-      stat:
-        path: /var/lib/dpkg/lock-frontend
-      register: lock_status
-
-    - name: Display lock file info
-      debug:
-        msg: "Lock file exists: {{ lock_status.stat.exists }} | Last modified: {{ lock_status.stat.mtime }}"
-      when: lock_status.stat.exists and (ansible_date_time.epoch|int - lock_status.stat.mtime|int) > 600
-
-    - name: Remove stale lock file
-      file:
-        path: /var/lib/dpkg/lock-frontend
-        state: absent
-      when: lock_status.stat.exists and (ansible_date_time.epoch|int - lock_status.stat.mtime|int) > 600
+        var: apt_check.stdout_lines
 
     - name: Wait for apt to finish
       wait_for:
         path: /var/lib/dpkg/lock-frontend
         state: absent
-        timeout: "{{ 300 if created_droplet is defined else 60 }}"
+
+        timeout: 300
       register: lock_wait
 
-    - name: Update and upgrade apt packages
+    - name: Update package cache
       apt:
-        upgrade: yes
         update_cache: yes
+        cache_valid_time: 0  # Force update
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: full
         force_apt_get: yes
       environment:
         DEBIAN_FRONTEND: noninteractive
-      vars:
-        ansible_python_interpreter: auto_silent
+
+    - name: Remove unused packages
+      apt:
+        autoremove: yes
 
     - name: Install basic utilities
       apt:
@@ -164,45 +126,37 @@
       async: 300
       poll: 10
 
-    - name: Install Python packages
+    - name: Install Python and pip
       apt:
-        name: [python3, python3-pip, python3-venv, virtualenv, python3-pytest]
+        name: 
+          - python3
+          - python3-pip
         state: present
         force_apt_get: yes
-      environment:
-        DEBIAN_FRONTEND: noninteractive
-      vars:
-        ansible_python_interpreter: auto_silent
-      async: 300
-      poll: 10
 
-    - name: Install python3-venv  #move to droplet creation
-      apt:
-        name: python3-venv
-        state: present
-        update_cache: yes
-      check_mode: yes
-      register: pip_check
-      
-    - name: Actually install python3-venv
-      apt:
-        name: python3-venv
-        state: present
-      when: pip_check.changed
-
-    - name: Install python3-pip  #move to droplet creation
+    - name: Ensure pip is installed
       apt:
         name: python3-pip
         state: present
         update_cache: yes
-      check_mode: yes
-      register: pip_check
-      
-    - name: Actually install python3-pip
+      register: pip_install
+
+    - name: Ensure pip is up-to-date
+      pip:
+        name: pip
+        state: latest
+      become: yes
+
+    - name: Install additional Python packages
       apt:
-        name: python3-pip
+        name:
+          - python3-venv
+          - virtualenv
+          - python3-pytest
+          - python3-pytest-cov
+          - python3-coverage
         state: present
-      when: pip_check.changed
+        force_apt_get: yes
 
     - name: Install Node.js
       apt:
@@ -246,6 +200,14 @@
         name: llm
         state: present
 
+    - name: Install global pip packages
+      pip:
+        name:
+          - llm
+          - pytest
+          - coverage
+        state: present
+
     - name: Configure Nginx
       template:
         src: templates/nginx.conf.j2
@@ -257,18 +219,6 @@
         src: /etc/nginx/sites-available/code-server
         dest: /etc/nginx/sites-enabled/code-server
         state: link
-      notify: Reload Nginx
-
-    - name: Create SSL directory
-      file:
-        path: /etc/nginx/ssl
-        state: directory
-        mode: '0755'
-
-    - name: Update nginx template for SSL
-      template:
-        src: templates/nginx_ssl.conf.j2
-        dest: /etc/nginx/sites-available/code-server
       notify: Reload Nginx
 
     - name: Verify system packages
@@ -306,11 +256,81 @@
         - code_server_check.rc == 0 
         - llm_check.rc == 0
 
+    - name: Clean apt cache
+      apt:
+        autoclean: yes
+
+    - name: Clear logs
+      shell: |
+        find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
+        find /var/log -type f -name "*.gz" -delete
+      changed_when: false
+
+    - name: Clear bash history
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items:
+        - ~/.bash_history
+        - ~/.lesshst
+        - ~/.history
+        - ~/.wget-hsts
+      changed_when: true
+
+    - name: Create snapshot metadata file
+      copy:
+        content: |
+          Snapshot created: {{ ansible_date_time.iso8601 }}
+          Base image: ubuntu-22-04-x64
+          Installed packages:
+            - nginx
+            - nodejs
+            - npm
+            - python3
+            - code-server
+            - llm
+        dest: /etc/snapshot-info.txt
+
   handlers:
     - name: Reload Nginx
       service:
         name: nginx
         state: reloaded
 
+- name: make snapshot and remove droplet
+  hosts: new_droplets
+  become: yes
+  remote_user: root
+  vars_files:
+    - vars/main.yml
+    - secrets.yml
+
+  tasks:
+    - name: Get existing droplet information
+      community.digitalocean.digital_ocean_droplet_info:
+        oauth_token: "{{ do_api_key }}"
+        name: "code-server-droplet-u22-base"
+      register: droplet_info
+
+    - name: Create snapshot of configured droplet
+      community.digitalocean.digital_ocean_snapshot:
+        oauth_token: "{{ do_api_key }}"
+        droplet_id: "{{ droplet_info.data[0].id }}"
+        snapshot_name: "code-server-droplet-u22-base-{{ ansible_date_time.date | replace('-', '') }}"
+        wait: yes
+        wait_timeout: 1800
+
+    - name: Display snapshot information
+      debug:
+        msg: "Created snapshot {{ snapshot.data.name }} with ID {{ snapshot.data.id }}"
+      when: snapshot is defined
+
+    - name: Destroy the droplet after snapshot creation
+      community.digitalocean.digital_ocean_droplet:
+        state: absent
+        name: "code-server-droplet-u22-base"
+        droplet_id: "{{ droplet_info.data[0].id }}"
+        oauth_token: "{{ do_api_key }}"
+      when: cleanup_after_snapshot | default(true)
 
 
