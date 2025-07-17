@@ -1,31 +1,51 @@
 users:
   - username: james
-    password: password
-    port: 8080
+    password: "password"
+    port: 8001  # code-server port
+    rs_py_port: 8002  # Flask app port for rs_py
+    initial_python_port: 8003  # Flask app port for initial_python
   - username: lisa
-    password: password
-    port: 8081
+    password: "password" 
+    port: 8011  
+    rs_py_port: 8012  
+    initial_python_port: 8013  
   - username: rachel
-    password: password
-    port: 8082
-  - username: paul
-    password: password
-    port: 8083
+    password: "password" 
+    port: 8021  
+    rs_py_port: 8022  
+    initial_python_port: 8023  
+  - username: maaret
+    password: "password" 
+    port: 8031  
+    rs_py_port: 8032  
+    initial_python_port: 8033  
   - username: elizabeth
-    password: password
-    port: 8084
-  - username: uros
-    password: password
-    port: 8085
-  - username: niel
-    password: password
-    port: 8086
+    password: "password" 
+    port: 8041  
+    rs_py_port: 8042  
+    initial_python_port: 8043  
+  - username: giorgos
+    password: "password" 
+    port: 8051  
+    rs_py_port: 8052  
+    initial_python_port: 8053  
   - username: user1
-    password: password
-    port: 8087
-  - username: bart
-    password: password
-    port: 8088
-  - username: huib
-    password: password
-    port: 8089
+    password: "password" 
+    port: 8061  
+    rs_py_port: 8062  
+    initial_python_port: 8063  
+  - username: user2
+    password: "password" 
+    port: 8071  
+    rs_py_port: 8072  
+    initial_python_port: 8073  
+  - username: user3
+    password: "password" 
+    port: 8081  
+    rs_py_port: 8082  
+    initial_python_port: 8083
+  - username: user4
+    password: "password" 
+    port: 8091  
+    rs_py_port: 8092  
+    initial_python_port: 8093
