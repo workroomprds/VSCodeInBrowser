@@ -1,1 +1,1 @@
-ssl_domain: "envs.workroomprds.com"
+ssl_domain: "{{ group_name }}.{{ main_domain }}"

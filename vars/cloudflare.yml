@@ -1,2 +1,2 @@
-cloudflare_zone: "workroomprds.com"
-cloudflare_record: "envs"
+cloudflare_zone: "{{ main_domain }}"
+cloudflare_record: "{{ group_name }}"
