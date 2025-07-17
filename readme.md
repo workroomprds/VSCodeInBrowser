@@ -7,6 +7,8 @@
 * Each user has a landing page at `«ip_address»/«username»`, and a link to VSCode, using (username and `password`) 
 * Details to be found in `access_info.txt`
 
+`ansible-playbook  user_setup_and_info.yml --ask-vault-pass`
+
 ## Dependencies
 Local machine needs `ansible`, ¿`ansible-vault` and ??
 Needs a Digital Ocean account for provisioning, and an Anthropic account for `llm`. Neither are hard dependencies.
